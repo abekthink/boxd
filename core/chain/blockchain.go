@@ -12,8 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/BOXFoundation/boxd/storage/key"
-
 	"github.com/BOXFoundation/boxd/boxd/eventbus"
 	"github.com/BOXFoundation/boxd/boxd/service"
 	"github.com/BOXFoundation/boxd/core"
@@ -25,6 +23,7 @@ import (
 	"github.com/BOXFoundation/boxd/p2p"
 	"github.com/BOXFoundation/boxd/script"
 	"github.com/BOXFoundation/boxd/storage"
+	"github.com/BOXFoundation/boxd/storage/key"
 	"github.com/BOXFoundation/boxd/util"
 	"github.com/BOXFoundation/boxd/util/bloom"
 	lru "github.com/hashicorp/golang-lru"
@@ -228,6 +227,15 @@ func (chain *BlockChain) processBlockMsg(msg p2p.Message) error {
 
 // ProcessBlock is used to handle new blocks.
 func (chain *BlockChain) ProcessBlock(block *types.Block, broadcast bool, fastConfirm bool, messageFrom peer.ID) error {
+	start := time.Now()
+	defer func() {
+		eclipse := float64(time.Since(start).Nanoseconds()) / 1e6
+		if eclipse < 2000.0 {
+			logger.Infof("ProcessBlock total cost: %6.3f ms, hash: %v", eclipse, block.BlockHash())
+		} else {
+			logger.Warnf("ProcessBlock total cost too much: %6.3f ms, hash: %v", eclipse, block.BlockHash())
+		}
+	}()
 
 	chain.chainLock.Lock()
 	defer chain.chainLock.Unlock()
@@ -312,6 +320,15 @@ func (chain *BlockChain) isInOrphanPool(blockHash crypto.HashType) bool {
 // tryAcceptBlock validates block within the chain context and see if it can be accepted.
 // Return whether it is on the main chain or not.
 func (chain *BlockChain) tryAcceptBlock(block *types.Block) error {
+	start := time.Now()
+	defer func() {
+		eclipse := float64(time.Since(start).Nanoseconds()) / 1e6
+		if eclipse < 2000.0 {
+			logger.Infof("tryAcceptBlock total cost: %6.3f ms, hash: %v", eclipse, block.BlockHash())
+		} else {
+			logger.Warnf("tryAcceptBlock total cost too much: %6.3f ms, hash: %v", eclipse, block.BlockHash())
+		}
+	}()
 	blockHash := block.BlockHash()
 	// must not be orphan if reaching here
 	parentBlock := chain.getParentBlock(block)
@@ -426,6 +443,15 @@ func (chain *BlockChain) getParentBlock(block *types.Block) *types.Block {
 // tryConnectBlockToMainChain tries to append the passed block to the main chain.
 // It enforces multiple rules such as double spends and script verification.
 func (chain *BlockChain) tryConnectBlockToMainChain(block *types.Block, batch storage.Batch) error {
+	start := time.Now()
+	defer func() {
+		eclipse := float64(time.Since(start).Nanoseconds()) / 1e6
+		if eclipse < 2000.0 {
+			logger.Infof("tryConnectBlockToMainChain total cost: %6.3f ms, hash: %v", eclipse, block.BlockHash())
+		} else {
+			logger.Warnf("tryConnectBlockToMainChain total cost too much: %6.3f ms, hash: %v", eclipse, block.BlockHash())
+		}
+	}()
 
 	logger.Debugf("Try to connect block to main chain. Hash: %s, Height: %d", block.BlockHash().String(), block.Height)
 	utxoSet := NewUtxoSet()
@@ -434,13 +460,17 @@ func (chain *BlockChain) tryConnectBlockToMainChain(block *types.Block, batch st
 	}
 
 	// Validate scripts here before utxoSet is updated; otherwise it may fail mistakenly
+	start = time.Now()
 	if err := validateBlockScripts(utxoSet, block); err != nil {
 		return err
 	}
+	eclipse := float64(time.Since(start).Nanoseconds()) / 1e6
+	logger.Infof("validateBlockScripts cost: %6.3f ms, hash: %v", eclipse, block.BlockHash())
 
 	transactions := block.Txs
 	// Perform several checks on the inputs for each transaction.
 	// Also accumulate the total fees.
+	start = time.Now()
 	var totalFees uint64
 	for _, tx := range transactions {
 		txFee, err := ValidateTxInputs(utxoSet, tx, block.Height)
@@ -455,6 +485,8 @@ func (chain *BlockChain) tryConnectBlockToMainChain(block *types.Block, batch st
 			return core.ErrBadFees
 		}
 	}
+	eclipse = float64(time.Since(start).Nanoseconds()) / 1e6
+	logger.Infof("ValidateTxInputs cost: %6.3f ms, hash: %v", eclipse, block.BlockHash())
 
 	// Ensure coinbase does not output more than block reward.
 	var totalCoinbaseOutput uint64
@@ -551,12 +583,25 @@ func (chain *BlockChain) revertBlock(block *types.Block, batch storage.Batch) er
 }
 
 func (chain *BlockChain) applyBlock(block *types.Block, utxoSet *UtxoSet, batch storage.Batch) error {
+	start := time.Now()
+	defer func() {
+		eclipse := float64(time.Since(start).Nanoseconds()) / 1e6
+		if eclipse < 100.0 {
+			logger.Infof("applyBlock total cost: %6.3f ms, hash: %v", eclipse, block.BlockHash())
+		} else {
+			logger.Warnf("applyBlock total cost too much: %6.3f ms, hash: %v", eclipse, block.BlockHash())
+		}
+	}()
 
 	// Save a deep copy before we potentially split the block's txs' outputs and mutate it
 	blockCopy := block.Copy()
 
 	// Split tx outputs if any
+	start = time.Now()
 	chain.splitBlockOutputs(blockCopy)
+	eclipse := float64(time.Since(start).Nanoseconds()) / 1e6
+	logger.Infof("splitBlockOutputs cost: %6.3f ms, hash: %v, tx count: %d",
+		eclipse, block.BlockHash(), len(block.Txs))
 
 	if utxoSet == nil {
 		utxoSet = NewUtxoSet()
@@ -576,11 +621,14 @@ func (chain *BlockChain) applyBlock(block *types.Block, utxoSet *UtxoSet, batch 
 		return err
 	}
 
+	start = time.Now()
 	if err := chain.filterHolder.AddFilter(block.Height, *block.BlockHash(), chain.DB(), batch, func() bloom.Filter {
 		return GetFilterForTransactionScript(blockCopy, utxoSet.utxoMap)
 	}); err != nil {
 		return err
 	}
+	eclipse = float64(time.Since(start).Nanoseconds()) / 1e6
+	logger.Infof("AddFilter cost: %6.3f ms, hash: %v", eclipse, block.BlockHash())
 
 	// save candidate context
 	if err := chain.consensus.StoreCandidateContext(block.BlockHash(), batch); err != nil {
@@ -1283,6 +1331,13 @@ func (chain *BlockChain) splitTxOutputs(tx *types.Transaction) {
 
 // split an output to a split address into  multiple outputs to composite addresses
 func (chain *BlockChain) splitTxOutput(txOut *corepb.TxOut) []*corepb.TxOut {
+	start := time.Now()
+	defer func() {
+		eclipse := float64(time.Since(start).Nanoseconds()) / 1e6
+		if eclipse > 10.0 {
+			logger.Infof("splitTxOutput total cost: %6.3f ms, txOut: %v", eclipse)
+		}
+	}()
 	// return the output itself if it cannot be split
 	txOuts := []*corepb.TxOut{txOut}
 	addr, err := script.NewScriptFromBytes(txOut.ScriptPubKey).ExtractAddress()
@@ -1333,8 +1388,20 @@ func (chain *BlockChain) splitTxOutput(txOut *corepb.TxOut) []*corepb.TxOut {
 // findSplitAddr search the main chain to see if the address is a split address.
 // If yes, return split address parameters
 func (chain *BlockChain) findSplitAddr(addr types.Address) (bool, []types.Address, []uint64, error) {
+	start := time.Now()
+	defer func() {
+		eclipse := float64(time.Since(start).Nanoseconds()) / 1e6
+		if eclipse > 10.0 {
+			logger.Infof("findSplitAddr total cost: %6.3f ms, txOut: %v", eclipse)
+		}
+	}()
 	splitScriptPrefix := *script.CreateSplitAddrScriptPrefix(addr)
+	start = time.Now()
 	hashes := chain.filterHolder.ListMatchedBlockHashes(splitScriptPrefix)
+	eclipse := float64(time.Since(start).Nanoseconds()) / 1e6
+	if eclipse > 5.0 {
+		logger.Infof("ListMatchedBlockHashes cost: %6.3f ms", eclipse)
+	}
 
 	for _, hash := range hashes {
 		block, err := chain.LoadBlockByHash(hash)

@@ -184,7 +184,16 @@ func (tx_pool *TransactionPool) processTxMsg(msg p2p.Message) error {
 // ProcessTx is used to handle new transactions.
 // utxoSet: utxos associated with the tx
 func (tx_pool *TransactionPool) ProcessTx(tx *types.Transaction, broadcast bool) error {
-
+	start := time.Now()
+	defer func() {
+		eclipse := float64(time.Since(start).Nanoseconds()) / 1e6
+		txHash, _ := tx.TxHash()
+		if eclipse < 50.0 {
+			logger.Infof("ProcessTx total cost: %6.3f ms, hash: %v", eclipse, txHash)
+		} else {
+			logger.Warnf("ProcessTx total cost too much: %6.3f ms, hash: %v", eclipse, txHash)
+		}
+	}()
 	if err := tx_pool.maybeAcceptTx(tx, broadcast, true); err != nil {
 		return err
 	}

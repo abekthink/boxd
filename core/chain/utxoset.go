@@ -6,6 +6,7 @@ package chain
 
 import (
 	"sync"
+	"time"
 
 	"github.com/BOXFoundation/boxd/core"
 	"github.com/BOXFoundation/boxd/core/types"
@@ -299,6 +300,15 @@ func (u *UtxoSet) LoadTxUtxos(tx *types.Transaction, db storage.Table) error {
 
 // LoadBlockUtxos loads all UTXOs txs in the block spend
 func (u *UtxoSet) LoadBlockUtxos(block *types.Block, db storage.Table) error {
+	start := time.Now()
+	defer func() {
+		eclipse := float64(time.Since(start).Nanoseconds()) / 1e6
+		if eclipse < 50.0 {
+			logger.Infof("LoadBlockUtxos total cost: %6.3f ms, hash: %v", eclipse, block.BlockHash())
+		} else {
+			logger.Warnf("LoadBlockUtxos total cost too much: %6.3f ms, hash: %v", eclipse, block.BlockHash())
+		}
+	}()
 
 	txs := map[crypto.HashType]int{}
 	outPointsToFetch := make(map[types.OutPoint]struct{})
